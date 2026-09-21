@@ -8443,6 +8443,14 @@ export const DICIONARIO: Traducoes = {
   "Este ponto usa o modelo definido na versão publicada do agente; a escolha do painel não se aplica.": {
     es: "Este punto usa el modelo definido en la versión publicada del agente; la elección del panel no se aplica.",
   },
+
+  // ─── components/inbox/InboxFilters.tsx, InboxLayout.tsx (colapso de Filtros/Detalhes) ───
+  "Filtros": { es: "Filtros" },
+  "Mostrar filtros": { es: "Mostrar filtros" },
+  "Ocultar filtros": { es: "Ocultar filtros" },
+  "Detalhes": { es: "Detalles" },
+  "Mostrar detalhes da conversa": { es: "Mostrar detalles de la conversación" },
+  "Ocultar detalhes da conversa": { es: "Ocultar detalles de la conversación" },
 };
 
 /**

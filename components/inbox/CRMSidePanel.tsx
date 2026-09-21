@@ -6,7 +6,8 @@ import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import type { Locale } from "date-fns";
 import Link from "next/link";
 import { useT } from "@/hooks/i18n/useT";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -416,22 +417,6 @@ export function CRMSidePanel({ conversation }: Props) {
   }, [conversation, contactId, desfechoDraft]);
 
 
-  const [leads, setLeads] = useState<LeadRow[] | null>(null);
-  const [orders, setOrders] = useState<OrderRow[] | null>(null);
-  const [activities, setActivities] = useState<ActivityRow[] | null>(null);
-  const [demandas, setDemandas] = useState<DemandaRow[] | null>(null);
-  const [fatos, setFatos] = useState<Array<{ id: string; headline: string; body: string }>>([]);
-  const [historico, setHistorico] = useState<Array<{ id: string; desfecho: string; fechada_em: string }>>([]);
-  const [summaryContactId, setSummaryContactId] = useState<string | null>(null);
-  /**
-   * O TERCEIRO ESTADO. Antes existiam dois — carregando e "tem N itens" — e a
-   * falha era traduzida para lista vazia, virando "Sem leads.": uma afirmação
-   * sobre o NEGÓCIO feita em cima de um erro de leitura. Distinguir "não tem"
-   * de "não consegui ler" é a diferença entre informar e mentir.
-   */
-  const [erro, setErro] = useState(false);
-  const [tentativa, setTentativa] = useState(0);
-
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
   const [leadDialogOpen, setLeadDialogOpen] = useState(false);
   const [leadAtivoId, setLeadAtivoId] = useState<string | null>(null);
@@ -445,97 +430,87 @@ export function CRMSidePanel({ conversation }: Props) {
   }, [leadDialogOpen, defaultPipeline.isError, t]);
 
   useEffect(() => {
-    if (!contactId) {
-      setLeads(null);
-      setOrders(null);
-      setActivities(null);
-      setDemandas(null);
-      setFatos([]); setHistorico([]);
-      setLeadAtivoId(null);
-      return;
-    }
-    let cancelled = false;
+    if (!contactId) setLeadAtivoId(null);
+  }, [contactId]);
 
-    setErro(false);
+  /**
+   * O resumo de CRM, com CACHE por contato — era o maior custo de trocar de
+   * conversa. Antes buscava num `useEffect` cru guardado em `useState`: toda
+   * troca de conversa refazia a consulta do zero e mostrava esqueleto
+   * completo, mesmo reabrindo um contato visto há 5 segundos.
+   *
+   * A chave carrega os QUATRO gatilhos de refetch por atividade — a mesma
+   * régua que o `useEffect` antigo tinha nas deps, e pela mesma razão:
+   * `contactId` não muda quando o dono muda, e o painel fica montado o tempo
+   * todo. `assigned_to_user_id` cobre assumir/transferir/liberar,
+   * `bot_silenced_until` cobre pausar/devolver — sem eles as quatro
+   * atividades novas ("Assumiu a conversa" e irmãs) nasciam no banco e a
+   * seção "Atividade" nunca as mostrava. Mudar qualquer um vira chave nova, e
+   * o react-query busca de novo sozinho — não precisa mais de um contador de
+   * invalidação manual (`tentativa`).
+   */
+  const summaryKey = [
+    "crm-summary",
+    contactId,
+    conversation?.assigned_to_user_id ?? null,
+    conversation?.bot_silenced_until ?? null,
+    conversation?.service_revision ?? null,
+    conversation?.current_demanda_id ?? null,
+  ] as const;
 
-    // Pela ROTA, não pelo cliente de navegador: o cookie de sessão é httpOnly,
-    // então o supabase-js do browser não vê a sessão e consultava como `anon`
-    // (medido: role=anon com gerente logado). Ver o cabeçalho da rota.
-    async function load() {
-      try {
-        const r = await apiClient.get<{
-          data: {
-            leads: LeadRow[];
-            orders: OrderRow[];
-            activities: ActivityRow[];
-            demandas: DemandaRow[];
-            fatos?: Array<{ id: string; headline: string; body: string }>;
-            historico?: Array<{ id: string; desfecho: string; fechada_em: string }>;
-          };
-        }>(`/api/v1/contacts/${contactId}/crm-summary`);
-        if (cancelled) return;
-        setSummaryContactId(contactId);
-        setLeads(r.data.leads);
-        setOrders(r.data.orders);
-        setActivities(r.data.activities);
-        // `?? []` e não `?? null`: aqui a leitura DEU CERTO. Cair em `null`
-        // faria a lista vazia se disfarçar do terceiro estado e o painel
-        // mostraria esqueleto para sempre num contato sem demanda aberta —
-        // que é o caso saudável.
-        setDemandas(r.data.demandas ?? []);
-        setFatos(r.data.fatos ?? []); setHistorico(r.data.historico ?? []);
-      } catch {
-        if (cancelled) return;
-        // Falha NÃO vira lista vazia. Os dados ficam `null` e o painel diz que
-        // não conseguiu ler — nunca que não há.
-        setErro(true);
-        setLeads(null);
-        setOrders(null);
-        setActivities(null);
-        setDemandas(null);
-        setFatos([]); setHistorico([]);
-      }
-    }
+  const summary = useQuery({
+    queryKey: summaryKey,
+    enabled: !!contactId,
+    queryFn: async () => {
+      // Pela ROTA, não pelo cliente de navegador: o cookie de sessão é httpOnly,
+      // então o supabase-js do browser não vê a sessão e consultava como `anon`
+      // (medido: role=anon com gerente logado). Ver o cabeçalho da rota.
+      const r = await apiClient.get<{
+        data: {
+          leads: LeadRow[];
+          orders: OrderRow[];
+          activities: ActivityRow[];
+          demandas: DemandaRow[];
+          fatos?: Array<{ id: string; headline: string; body: string }>;
+          historico?: Array<{ id: string; desfecho: string; fechada_em: string }>;
+        };
+      }>(`/api/v1/contacts/${contactId}/crm-summary`);
+      return {
+        leads: r.data.leads,
+        orders: r.data.orders,
+        activities: r.data.activities,
+        // Aqui a leitura DEU CERTO — a lista vazia é dado real, não ausência.
+        demandas: r.data.demandas ?? [],
+        fatos: r.data.fatos ?? [],
+        historico: r.data.historico ?? [],
+      };
+    },
+  });
 
-    void load();
-    return () => {
-      cancelled = true;
-    };
-    // AS DUAS DEPS NOVAS SÃO O REFETCH DA TROCA DE COMANDO.
-    //
-    // Este painel não usa react-query: ele busca num `useEffect` e guarda em
-    // `useState`, então `invalidateQueries` não o alcança — e os hooks de
-    // claim/transfer/release/pausar invalidam só as chaves de conversa. Resultado
-    // medido: as quatro atividades novas ("Assumiu a conversa" e irmãs) nasciam no
-    // banco e a seção "Atividade" ao lado NUNCA as mostrava, porque `contactId` não
-    // muda quando o dono muda e o painel fica montado o tempo todo.
-    //
-    // Depender do DADO que muda é mais honesto que um contador de invalidação:
-    // `assigned_to_user_id` cobre assumir/transferir/liberar e `bot_silenced_until`
-    // cobre pausar e devolver — que são exatamente os quatro gestos que geram linha.
-  }, [contactId, tentativa, conversation?.assigned_to_user_id, conversation?.bot_silenced_until, conversation?.service_revision, conversation?.current_demanda_id]);
-
-  // Recarrega o resumo pelo MESMO caminho do "Tentar de novo": o efeito depende
-  // de `tentativa`, então a demanda recém-marcada volta do servidor em vez de
-  // ser apagada da lista no cliente. Sumir no otimismo esconderia uma escrita
-  // que falhou depois — e escrita que parece ter dado certo é o defeito que
-  // esta tela inteira combate.
-  const recarregar = useCallback(() => setTentativa((n) => n + 1), []);
+  // Recarrega o resumo pelo MESMO caminho do "Tentar de novo": a demanda
+  // recém-marcada volta do servidor em vez de ser apagada da lista no
+  // cliente. Sumir no otimismo esconderia uma escrita que falhou depois — e
+  // escrita que parece ter dado certo é o defeito que esta tela combate.
+  const recarregar = () => {
+    void summary.refetch();
+  };
 
   const tags = contact?.tags ?? [];
   const displayName = rotuloDoContato(contact, t);
 
-  // `erro` PRIMEIRO, e não é detalhe: as três listas voltam a `null` quando a
-  // leitura falha, e este derivado lê `null` como "ainda não chegou". Sem esta
-  // guarda o painel mostraria esqueleto para sempre e o estado de falha nunca
-  // apareceria — o mesmo colapso de significados que criou o defeito original,
-  // só que trocando "erro→vazio" por "erro→carregando".
-  const sectionsLoading = useMemo(
-    () =>
-      !erro &&
-      (summaryContactId !== contactId || (leads === null && orders === null && activities === null && demandas === null)),
-    [erro, summaryContactId, contactId, leads, orders, activities, demandas],
-  );
+  // `erro` PRIMEIRO, e não é detalhe: as listas abaixo voltam a `null` quando
+  // a leitura falha, e o painel diz que não conseguiu ler — nunca que não há.
+  const erro = summary.isError;
+  // `isLoading` (não `isFetching`): um refetch em segundo plano (troca de
+  // comando) não deve apagar o que já está na tela — só a primeira carga
+  // deste contato mostra esqueleto.
+  const sectionsLoading = summary.isLoading;
+  const leads = summary.data?.leads ?? null;
+  const orders = summary.data?.orders ?? null;
+  const activities = summary.data?.activities ?? null;
+  const demandas = summary.data?.demandas ?? null;
+  const fatos = summary.data?.fatos ?? [];
+  const historico = summary.data?.historico ?? [];
 
   if (!conversation) {
     return (
@@ -681,7 +656,7 @@ export function CRMSidePanel({ conversation }: Props) {
           <SemLista
             vazio="Nenhuma demanda aberta."
             erro={erro}
-            onTentarDeNovo={() => setTentativa((n) => n + 1)}
+            onTentarDeNovo={recarregar}
           />
         )}
       </section>
@@ -711,7 +686,7 @@ export function CRMSidePanel({ conversation }: Props) {
             onSalvo={recarregar}
           /></fieldset>
         ) : (
-          <SemLista vazio="Sem leads." erro={erro} onTentarDeNovo={() => setTentativa((n) => n + 1)} />
+          <SemLista vazio="Sem leads." erro={erro} onTentarDeNovo={recarregar} />
         )}
       </section>
 
@@ -743,7 +718,7 @@ export function CRMSidePanel({ conversation }: Props) {
             ))}
           </ul>
         ) : (
-          <SemLista vazio="Sem pedidos." erro={erro} onTentarDeNovo={() => setTentativa((n) => n + 1)} />
+          <SemLista vazio="Sem pedidos." erro={erro} onTentarDeNovo={recarregar} />
         )}
       </section>
 
@@ -784,7 +759,7 @@ export function CRMSidePanel({ conversation }: Props) {
             ))}
           </ul>
         ) : (
-          <SemLista vazio="Sem atividade." erro={erro} onTentarDeNovo={() => setTentativa((n) => n + 1)} />
+          <SemLista vazio="Sem atividade." erro={erro} onTentarDeNovo={recarregar} />
         )}
       </section>
     </aside>

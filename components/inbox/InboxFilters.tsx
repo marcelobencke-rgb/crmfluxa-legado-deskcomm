@@ -1,7 +1,7 @@
 "use client";
 import { useT } from "@/hooks/i18n/useT";
 import { useEffect, useState } from "react";
-import { MagnifyingGlass } from "@/lib/ui/icons";
+import { CaretDown, CaretUp, MagnifyingGlass } from "@/lib/ui/icons";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
@@ -55,9 +55,12 @@ export interface InboxFiltersValue {
 interface Props {
   value: InboxFiltersValue;
   onChange: (next: InboxFiltersValue) => void;
+  /** Corpo (busca + seletores) escondido — as abas continuam sempre visíveis. */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }
 
-export function InboxFilters({ value, onChange }: Props) {
+export function InboxFilters({ value, onChange, collapsed = false, onToggleCollapsed }: Props) {
   const t = useT();
   const [searchInput, setSearchInput] = useState(value.search);
   const { data: channels } = useChannelSessions({ refetchInterval: 30_000 });
@@ -105,7 +108,26 @@ export function InboxFilters({ value, onChange }: Props) {
 
   return (
     <div className="border-b border-border bg-background">
-      <div className="space-y-2 px-3 pt-3 pb-2">
+      {/*
+        O TOGGLE FICA SEMPRE VISÍVEL, colapsado ou não — senão colapsar seria
+        um beco sem volta sem reabrir pela URL. Busca e seletores custam a
+        altura maior aqui; as abas ficam de fora do colapso de propósito: são
+        a navegação entre visões, não um "filtro" que se esconde.
+      */}
+      <div className="flex items-center justify-between px-3 pt-2">
+        <span className="text-xs font-medium text-muted-foreground">{t("Filtros")}</span>
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? t("Mostrar filtros") : t("Ocultar filtros")}
+          className="rounded-md p-1 text-text-subtle hover:bg-surface-elevated hover:text-text"
+        >
+          {collapsed ? <CaretDown size={14} weight="bold" /> : <CaretUp size={14} weight="bold" />}
+        </button>
+      </div>
+      {!collapsed && (
+      <div className="space-y-2 px-3 pt-1 pb-2">
         <div className="flex items-center gap-2">
           <div className="relative min-w-0 flex-1">
             <MagnifyingGlass
@@ -200,6 +222,7 @@ export function InboxFilters({ value, onChange }: Props) {
           </div>
         )}
       </div>
+      )}
 
       {/* Faixa sublinhada, não caixa cinza: cinco abas num grid de 280px
           espremiam "Fechadas" contra "Automático" até os rótulos se tocarem. */}

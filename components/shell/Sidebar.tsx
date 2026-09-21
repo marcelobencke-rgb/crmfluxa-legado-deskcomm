@@ -361,14 +361,19 @@ export function Sidebar({ collapsed: collapsedNoServidor }: { collapsed: boolean
   const [, startTransition] = useTransition();
 
   function alternar() {
-    setCollapsed((atual) => {
-      const proximo = !atual;
-      // Fire-and-forget: só grava o cookie pro próximo load. Nenhuma
-      // revalidação — ver o comentário em `toggleSidebar.ts`.
-      startTransition(() => {
-        void toggleSidebar(atual);
-      });
-      return proximo;
+    // `atual` sai do closure, não de um updater funcional: `setCollapsed` com
+    // efeito colateral dentro do callback é o padrão que dispara "Cannot call
+    // startTransition while rendering" — o React pode invocar esse callback
+    // durante a fase de render (ele precisa ser puro), e `startTransition` lá
+    // dentro quebra essa regra. `alternar` só roda a partir do `onClick`, então
+    // o valor do closure já é o do render mais recente — sem risco de ficar
+    // desatualizado entre um clique e outro.
+    const atual = collapsed;
+    setCollapsed(!atual);
+    // Fire-and-forget: só grava o cookie pro próximo load. Nenhuma
+    // revalidação — ver o comentário em `toggleSidebar.ts`.
+    startTransition(() => {
+      void toggleSidebar(atual);
     });
   }
 

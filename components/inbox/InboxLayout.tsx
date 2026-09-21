@@ -27,7 +27,13 @@ import { InboxKeyboardShortcuts } from "./InboxKeyboardShortcuts";
 import { ShortcutsHelpDialog } from "./ShortcutsHelpDialog";
 import { OpenConversationProvider } from "@/hooks/notifications/OpenConversationContext";
 // ADR-05: ícone de feature sai do mapa canônico, nunca do pacote direto.
-import { CaretLeft, ChatCircle, IdentificationCard } from "@/lib/ui/icons";
+import {
+  CaretDoubleLeft,
+  CaretDoubleRight,
+  CaretLeft,
+  ChatCircle,
+  IdentificationCard,
+} from "@/lib/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
@@ -101,6 +107,9 @@ export function tabToFilter(
 
 const FILTER_TABS: InboxTab[] = ["unassigned", "mine", "all", "closed", "ai"];
 
+const CHAVE_FILTROS_COLAPSADOS = "inbox-filtros-colapsados";
+const CHAVE_PAINEL_COLAPSADO = "inbox-painel-colapsado";
+
 /**
  * Lê ?filter= (G4-02, deep-link). ?filter=all é HONRADO mesmo para agent — a
  * lista volta RLS-scoped (a tab só some cosmeticamente); default: fila.
@@ -155,6 +164,47 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
    * quem MOSTRA é o composer — são irmãos, e o estado comum é do pai.
    */
   const [respondendo, setRespondendo] = useState<ConversationMensagem | null>(null);
+
+  /**
+   * COLAPSO DE "FILTROS" E DE "DETALHES" — preferência por navegador, mesmo
+   * padrão do `Sidebar.tsx` (grupos fechados): nasce ABERTO em toda
+   * renderização — servidor, primeira pintura do cliente, testes que nunca
+   * clicam em nada — e só muda depois do mount, se o `localStorage` tiver
+   * algo salvo. `try/catch` porque aba privada bloqueia o storage; falhar aí
+   * não pode quebrar o inbox, só custa a preferência não sobreviver a um F5.
+   */
+  const [filtrosColapsados, setFiltrosColapsados] = useState(false);
+  const [painelColapsado, setPainelColapsado] = useState(false);
+  useEffect(() => {
+    try {
+      setFiltrosColapsados(window.localStorage.getItem(CHAVE_FILTROS_COLAPSADOS) === "1");
+      setPainelColapsado(window.localStorage.getItem(CHAVE_PAINEL_COLAPSADO) === "1");
+    } catch {
+      // Storage bloqueado — fica tudo aberto, que é o padrão.
+    }
+  }, []);
+  const toggleFiltros = useCallback(() => {
+    setFiltrosColapsados((v) => {
+      const next = !v;
+      try {
+        window.localStorage.setItem(CHAVE_FILTROS_COLAPSADOS, next ? "1" : "0");
+      } catch {
+        // Clique continua funcionando nesta sessão; só não sobrevive a um F5.
+      }
+      return next;
+    });
+  }, []);
+  const togglePainel = useCallback(() => {
+    setPainelColapsado((v) => {
+      const next = !v;
+      try {
+        window.localStorage.setItem(CHAVE_PAINEL_COLAPSADO, next ? "1" : "0");
+      } catch {
+        // Clique continua funcionando nesta sessão; só não sobrevive a um F5.
+      }
+      return next;
+    });
+  }, []);
 
   /**
    * A ORG tem automático de pé? Sobe para cá porque agora é a ABA que precisa —
@@ -357,7 +407,14 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   return (
     <OpenConversationProvider conversationId={selectedId}>
     <div
-      className="grid h-[calc(100dvh-3.5rem-2*var(--space-6))] w-full grid-cols-1 md:grid-cols-[300px_1fr] xl:grid-cols-[272px_1fr_296px] 2xl:grid-cols-[300px_1fr_320px]"
+      className={cn(
+        "grid h-[calc(100dvh-3.5rem-2*var(--space-6))] w-full grid-cols-1 md:grid-cols-[300px_1fr]",
+        // O painel colapsado encolhe para uma tira de 44px — só o botão de
+        // reabrir — e devolve a diferença (252/276px) para a conversa.
+        painelColapsado
+          ? "xl:grid-cols-[272px_1fr_44px] 2xl:grid-cols-[300px_1fr_44px]"
+          : "xl:grid-cols-[272px_1fr_296px] 2xl:grid-cols-[300px_1fr_320px]",
+      )}
       /*
        * O ESTADO DO TEMPO REAL, LEGÍVEL DE FORA — mesmo par que o dossiê do lead
        * já publica (`LeadDossier`), e pela mesma razão: quando a entrega morre,
@@ -400,7 +457,12 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
           colunas.lista,
         )}
       >
-        <InboxFilters value={filterValue} onChange={setFilterValue} />
+        <InboxFilters
+          value={filterValue}
+          onChange={setFilterValue}
+          collapsed={filtrosColapsados}
+          onToggleCollapsed={toggleFiltros}
+        />
         <div className="min-h-0 flex-1 overflow-hidden">
           <ConversationList
             listQuery={listQ}
@@ -504,8 +566,41 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
         )}
       </div>
 
-      <div className="hidden h-full min-h-0 xl:block">
-        <CRMSidePanel conversation={selectedConversation} />
+      {/*
+        DETALHES DA CONVERSA, COLAPSÁVEL. Colapsado vira uma tira de 44px com
+        só o botão de reabrir — a largura que o grid acima já reservou para
+        ela — em vez de sumir de vez: sumir de vez tiraria o caminho de volta
+        de dentro da própria coluna.
+      */}
+      <div className="hidden h-full min-h-0 xl:flex xl:flex-col">
+        {painelColapsado ? (
+          <button
+            type="button"
+            onClick={togglePainel}
+            aria-label={t("Mostrar detalhes da conversa")}
+            title={t("Mostrar detalhes da conversa")}
+            className="flex h-full w-full flex-col items-center gap-2 border-l border-border pt-3 text-text-subtle hover:bg-surface-elevated hover:text-text"
+          >
+            <CaretDoubleLeft size={16} weight="bold" />
+          </button>
+        ) : (
+          <>
+            <div className="flex shrink-0 items-center justify-between border-l border-border px-2 py-1.5">
+              <span className="text-xs font-medium text-muted-foreground">{t("Detalhes")}</span>
+              <button
+                type="button"
+                onClick={togglePainel}
+                aria-label={t("Ocultar detalhes da conversa")}
+                className="rounded-md p-1 text-text-subtle hover:bg-surface-elevated hover:text-text"
+              >
+                <CaretDoubleRight size={14} weight="bold" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1">
+              <CRMSidePanel conversation={selectedConversation} />
+            </div>
+          </>
+        )}
       </div>
 
       <InboxKeyboardShortcuts
